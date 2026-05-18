@@ -1,5 +1,11 @@
 import os
 import logging
+import imaplib
+import smtplib
+import email
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.header import decode_header
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from groq import Groq
@@ -7,6 +13,8 @@ from groq import Groq
 logging.basicConfig(level=logging.INFO)
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+YANDEX_EMAIL = os.environ["YANDEX_EMAIL"]
+YANDEX_PASSWORD = os.environ["YANDEX_PASSWORD"]
 
 SYSTEM_PROMPT = """Ты — персональный помощник Никиты, специалиста департамента финансового обеспечения и контроля РУДН.
 
@@ -18,10 +26,9 @@ SYSTEM_PROMPT = """Ты — персональный помощник Никит
 Твои задачи:
 1. Фиксировать задачи которые пишет пользователь
 2. Раскладывать их по приоритетам (высокий / средний / низкий) и срокам
-3. По команде /tasks — показывать все текущие задачи структурированно
-4. Помогать с текстами для дайджеста, письмами поставщикам, закупочными вопросами
+3. Помогать с текстами для дайджеста, письмами поставщикам, закупочными вопросами
 
-Формат списка задач:
+Форматируй списки задач:
 🔴 Высокий приоритет
 🟡 Средний приоритет
 🟢 Низкий приоритет
@@ -30,19 +37,58 @@ SYSTEM_PROMPT = """Ты — персональный помощник Никит
 
 chat_histories = {}
 
+def get_last_emails(n=5):
+    try:
+        imap = imaplib.IMAP4_SSL("imap.yandex.ru")
+        imap.login(YANDEX_EMAIL, YANDEX_PASSWORD)
+        imap.select("INBOX")
+        _, messages = imap.search(None, "ALL")
+        mail_ids = messages[0].split()
+        last_ids = mail_ids[-n:]
+        result = []
+        for mid in reversed(last_ids):
+            _, msg_data = imap.fetch(mid, "(RFC822)")
+            msg = email.message_from_bytes(msg_data[0][1])
+            subject = decode_header(msg["Subject"])[0][0]
+            if isinstance(subject, bytes):
+                subject = subject.decode(errors="ignore")
+            sender = msg.get("From", "")
+            result.append(f"От: {sender}\nТема: {subject}")
+        imap.logout()
+        return "\n\n".join(result)
+    except Exception as e:
+        return f"Ошибка при получении писем: {e}"
+
+def send_email(to, subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = YANDEX_EMAIL
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        server = smtplib.SMTP_SSL("smtp.yandex.ru", 465)
+        server.login(YANDEX_EMAIL, YANDEX_PASSWORD)
+        server.sendmail(YANDEX_EMAIL, to, msg.as_string())
+        server.quit()
+        return "Письмо отправлено!"
+    except Exception as e:
+        return f"Ошибка отправки: {e}"
+
+async def show_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Загружаю последние письма...")
+    result = get_last_emails(5)
+    await update.message.reply_text(result)
+
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in chat_histories or not chat_histories[user_id]:
         await update.message.reply_text("Задач пока нет. Напиши что нужно сделать!")
         return
-
     chat_histories[user_id].append({"role": "user", "content": "Покажи все текущие задачи структурированно по приоритетам"})
-
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "system", "content": SYSTEM_PROMPT}] + chat_histories[user_id]
     )
-
     reply = response.choices[0].message.content
     chat_histories[user_id].append({"role": "assistant", "content": reply})
     await update.message.reply_text(reply)
@@ -76,5 +122,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).build()
 app.add_handler(CommandHandler("tasks", show_tasks))
 app.add_handler(CommandHandler("reset", reset))
+app.add_handler(CommandHandler("mail", show_emails))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.run_polling()
