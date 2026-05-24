@@ -109,7 +109,7 @@ def get_weather():
 
 def get_news():
     feeds = [
-        ("РБК", "https://rss.rbc.ru/archive/main.rss"),
+        ("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
         ("Коммерсант", "https://www.kommersant.ru/RSS/news.xml"),
     ]
     result = []
