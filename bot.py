@@ -37,6 +37,18 @@ SYSTEM_PROMPT = """Ты — персональный помощник Никит
 
 chat_histories = {}
 
+def decode_mime_str(value):
+    if not value:
+        return ""
+    parts = decode_header(value)
+    decoded = []
+    for part, encoding in parts:
+        if isinstance(part, bytes):
+            decoded.append(part.decode(encoding or "utf-8", errors="ignore"))
+        else:
+            decoded.append(part)
+    return "".join(decoded)
+
 def get_last_emails(n=5):
     try:
         imap = imaplib.IMAP4_SSL("imap.yandex.ru")
@@ -49,10 +61,8 @@ def get_last_emails(n=5):
         for mid in reversed(last_ids):
             _, msg_data = imap.fetch(mid, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
-            subject = decode_header(msg["Subject"])[0][0]
-            if isinstance(subject, bytes):
-                subject = subject.decode(errors="ignore")
-            sender = msg.get("From", "")
+            subject = decode_mime_str(msg["Subject"])
+            sender = decode_mime_str(msg.get("From", ""))
             result.append(f"От: {sender}\nТема: {subject}")
         imap.logout()
         return "\n\n".join(result)
