@@ -111,6 +111,8 @@ def get_news():
     feeds = [
         ("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
         ("Коммерсант", "https://www.kommersant.ru/RSS/news.xml"),
+        ("Habr / ИИ", "https://habr.com/ru/rss/hub/artificial_intelligence/all/?fl=ru"),
+        ("Motorsport / Ф1", "https://ru.motorsport.com/rss/f1/news/")
     ]
     result = []
     for source, url in feeds:
