@@ -3,6 +3,10 @@ import logging
 import imaplib
 import smtplib
 import email
+import feedparser
+import requests
+from datetime import time
+import pytz
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import decode_header
@@ -15,6 +19,9 @@ logging.basicConfig(level=logging.INFO)
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 YANDEX_EMAIL = os.environ["YANDEX_EMAIL"]
 YANDEX_PASSWORD = os.environ["YANDEX_PASSWORD"]
+OPENWEATHER_API_KEY = os.environ["OPENWEATHER_API_KEY"]
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+YOUR_CHAT_ID = os.environ["YOUR_CHAT_ID"]
 
 SYSTEM_PROMPT = """Ты — персональный помощник Никиты, специалиста департамента финансового обеспечения и контроля РУДН.
 
@@ -49,7 +56,7 @@ def decode_mime_str(value):
             decoded.append(part)
     return "".join(decoded)
 
-def get_last_emails(n=5):
+def get_last_emails(n=3):
     try:
         imap = imaplib.IMAP4_SSL("imap.yandex.ru")
         imap.login(YANDEX_EMAIL, YANDEX_PASSWORD)
@@ -83,6 +90,59 @@ def send_email(to, subject, body):
         return "Письмо отправлено!"
     except Exception as e:
         return f"Ошибка отправки: {e}"
+
+def get_weather():
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?q=Moscow&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
+        response = requests.get(url)
+        data = response.json()
+        temp = round(data["main"]["temp"])
+        feels_like = round(data["main"]["feels_like"])
+        description = data["weather"][0]["description"]
+        humidity = data["main"]["humidity"]
+        wind = round(data["wind"]["speed"])
+        return (f"🌤 Погода в Москве:\n"
+                f"{description.capitalize()}, {temp}°C (ощущается как {feels_like}°C)\n"
+                f"Влажность: {humidity}%, Ветер: {wind} м/с")
+    except Exception as e:
+        return f"Ошибка получения погоды: {e}"
+
+def get_news():
+    feeds = [
+        ("РБК", "https://rss.rbc.ru/archive/main.rss"),
+        ("Коммерсант", "https://www.kommersant.ru/RSS/news.xml"),
+    ]
+    result = []
+    for source, url in feeds:
+        try:
+            feed = feedparser.parse(url)
+            items = feed.entries[:3]
+            news_lines = [f"• {item.title}" for item in items]
+            result.append(f"📰 {source}:\n" + "\n".join(news_lines))
+        except Exception as e:
+            result.append(f"📰 {source}: ошибка загрузки")
+    return "\n\n".join(result)
+
+def build_morning_summary():
+    weather = get_weather()
+    emails = get_last_emails(3)
+    news = get_news()
+    summary = (
+        f"☀️ Доброе утро, Никита!\n\n"
+        f"{weather}\n\n"
+        f"✉️ Последние письма:\n{emails}\n\n"
+        f"{news}"
+    )
+    return summary
+
+async def morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Собираю утреннюю сводку...")
+    summary = build_morning_summary()
+    await update.message.reply_text(summary)
+
+async def send_morning_auto(context: ContextTypes.DEFAULT_TYPE):
+    summary = build_morning_summary()
+    await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=summary)
 
 async def show_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Загружаю последние письма...")
@@ -129,9 +189,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_histories[user_id].append({"role": "assistant", "content": reply})
     await update.message.reply_text(reply)
 
-app = ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).build()
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+moscow_tz = pytz.timezone("Europe/Moscow")
+app.job_queue.run_daily(
+    send_morning_auto,
+    time=time(8, 0, 0, tzinfo=moscow_tz)
+)
+
 app.add_handler(CommandHandler("tasks", show_tasks))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(CommandHandler("mail", show_emails))
+app.add_handler(CommandHandler("morning", morning))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.run_polling()
