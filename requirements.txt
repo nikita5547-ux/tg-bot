@@ -3,3 +3,4 @@ groq
 feedparser
 requests
 pytz
+aiohttp
