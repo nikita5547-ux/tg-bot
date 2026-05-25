@@ -112,14 +112,19 @@ def get_news():
         ("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
         ("Коммерсант", "https://www.kommersant.ru/RSS/news.xml"),
         ("Habr / ИИ", "https://habr.com/ru/rss/hub/artificial_intelligence/all/?fl=ru"),
-        ("Motorsport / Ф1", "https://ru.motorsport.com/rss/f1/news/")
+        ("Motorsport / Ф1", "https://ru.motorsport.com/rss/f1/news/"),
     ]
     result = []
     for source, url in feeds:
         try:
             feed = feedparser.parse(url)
             items = feed.entries[:3]
-            news_lines = [f"• {item.title}" for item in items]
+            news_lines = []
+            for item in items:
+                line = f"• {item.title}"
+                if hasattr(item, "link") and item.link:
+                    line += f"\n  🔗 {item.link}"
+                news_lines.append(line)
             result.append(f"📰 {source}:\n" + "\n".join(news_lines))
         except Exception as e:
             result.append(f"📰 {source}: ошибка загрузки")
