@@ -134,13 +134,23 @@ def build_morning_summary():
     weather = get_weather()
     emails = get_last_emails(3)
     news = get_news()
-    summary = (
+    main = (
         f"☀️ Доброе утро, Никита!\n\n"
         f"{weather}\n\n"
-        f"✉️ Последние письма:\n{emails}\n\n"
-        f"{news}"
+        f"✉️ Последние письма:\n{emails}"
     )
-    return summary
+    return main, news  # два отдельных блока
+
+async def morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Собираю утреннюю сводку...")
+    main, news = build_morning_summary()
+    await update.message.reply_text(main)
+    await update.message.reply_text(news)
+
+async def send_morning_auto(context: ContextTypes.DEFAULT_TYPE):
+    main, news = build_morning_summary()
+    await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=main)
+    await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=news)
 
 async def morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Собираю утреннюю сводку...")
