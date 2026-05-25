@@ -1,8 +1,10 @@
 import os
 import logging
 import imaplib
-import smtplib
 import email
+import smtplib
+import asyncio
+import aiohttp
 import feedparser
 import requests
 from datetime import time
@@ -44,6 +46,7 @@ SYSTEM_PROMPT = """Ты — персональный помощник Никит
 
 chat_histories = {}
 
+
 def decode_mime_str(value):
     if not value:
         return ""
@@ -55,6 +58,7 @@ def decode_mime_str(value):
         else:
             decoded.append(part)
     return "".join(decoded)
+
 
 def get_last_emails(n=3):
     try:
@@ -76,6 +80,7 @@ def get_last_emails(n=3):
     except Exception as e:
         return f"Ошибка при получении писем: {e}"
 
+
 def send_email(to, subject, body):
     try:
         msg = MIMEMultipart()
@@ -91,11 +96,13 @@ def send_email(to, subject, body):
     except Exception as e:
         return f"Ошибка отправки: {e}"
 
-def get_weather():
+
+async def get_weather_async():
     try:
         url = f"https://api.openweathermap.org/data/2.5/weather?q=Moscow&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
-        response = requests.get(url)
-        data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                data = await response.json()
         temp = round(data["main"]["temp"])
         feels_like = round(data["main"]["feels_like"])
         description = data["weather"][0]["description"]
@@ -107,17 +114,21 @@ def get_weather():
     except Exception as e:
         return f"Ошибка получения погоды: {e}"
 
-def get_news():
+
+async def get_news_async():
     feeds = [
         ("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
         ("Коммерсант", "https://www.kommersant.ru/RSS/news.xml"),
         ("Habr / ИИ", "https://habr.com/ru/rss/hub/artificial_intelligence/all/?fl=ru"),
         ("Motorsport / Ф1", "https://ru.motorsport.com/rss/f1/news/"),
     ]
-    result = []
-    for source, url in feeds:
+
+    async def fetch_feed(source, url):
         try:
-            feed = feedparser.parse(url)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    content = await resp.text()
+            feed = feedparser.parse(content)
             items = feed.entries[:3]
             news_lines = []
             for item in items:
@@ -125,46 +136,46 @@ def get_news():
                 if hasattr(item, "link") and item.link:
                     line += f"\n  🔗 {item.link}"
                 news_lines.append(line)
-            result.append(f"📰 {source}:\n" + "\n".join(news_lines))
-        except Exception as e:
-            result.append(f"📰 {source}: ошибка загрузки")
-    return "\n\n".join(result)
+            return f"📰 {source}:\n" + "\n".join(news_lines)
+        except Exception:
+            return f"📰 {source}: ошибка загрузки"
 
-def build_morning_summary():
-    weather = get_weather()
-    emails = get_last_emails(3)
-    news = get_news()
+    results = await asyncio.gather(*[fetch_feed(s, u) for s, u in feeds])
+    return "\n\n".join(results)
+
+
+async def build_morning_summary():
+    weather, emails, news = await asyncio.gather(
+        get_weather_async(),
+        asyncio.to_thread(get_last_emails, 3),
+        get_news_async(),
+    )
     main = (
         f"☀️ Доброе утро, Никита!\n\n"
         f"{weather}\n\n"
         f"✉️ Последние письма:\n{emails}"
     )
-    return main, news  # два отдельных блока
+    return main, news
+
 
 async def morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Собираю утреннюю сводку...")
-    main, news = build_morning_summary()
+    main, news = await build_morning_summary()
     await update.message.reply_text(main)
     await update.message.reply_text(news)
 
+
 async def send_morning_auto(context: ContextTypes.DEFAULT_TYPE):
-    main, news = build_morning_summary()
+    main, news = await build_morning_summary()
     await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=main)
     await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=news)
 
-async def morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Собираю утреннюю сводку...")
-    summary = build_morning_summary()
-    await update.message.reply_text(summary)
-
-async def send_morning_auto(context: ContextTypes.DEFAULT_TYPE):
-    summary = build_morning_summary()
-    await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=summary)
 
 async def show_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Загружаю последние письма...")
     result = get_last_emails(5)
     await update.message.reply_text(result)
+
 
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -180,10 +191,12 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_histories[user_id].append({"role": "assistant", "content": reply})
     await update.message.reply_text(reply)
 
+
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     chat_histories[user_id] = []
     await update.message.reply_text("История очищена. Начинаем заново!")
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -205,6 +218,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = response.choices[0].message.content
     chat_histories[user_id].append({"role": "assistant", "content": reply})
     await update.message.reply_text(reply)
+
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
